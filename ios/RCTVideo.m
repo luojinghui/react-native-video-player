@@ -3,6 +3,10 @@
 #import <React/RCTBridgeModule.h>
 #import <React/RCTEventDispatcher.h>
 #import <React/UIView+React.h>
+#import <AudioToolbox/AudioToolbox.h>
+#import <AVFoundation/AVAudioPlayer.h>
+#import <AVFoundation/AVAudioSession.h>
+#import <MediaPlayer/MediaPlayer.h>
 
 static NSString *const statusKeyPath = @"status";
 static NSString *const playbackLikelyToKeepUpKeyPath = @"playbackLikelyToKeepUp";
@@ -47,6 +51,8 @@ static NSString *const timedMetadata = @"timedMetadata";
   NSString * _resizeMode;
   BOOL _fullscreenPlayerPresented;
   UIViewController * _presentingViewController;
+  NSString * m_title;
+  NSString * m_author;
 }
 
 - (instancetype)initWithEventDispatcher:(RCTEventDispatcher *)eventDispatcher
@@ -295,7 +301,11 @@ static NSString *const timedMetadata = @"timedMetadata";
     //Perform on next run loop, otherwise onVideoLoadStart is nil
     if(self.onVideoLoadStart) {
       id uri = [source objectForKey:@"uri"];
+      id title = [source objectForKey:@"title"];
+      id author = [source objectForKey:@"author"];
       id type = [source objectForKey:@"type"];
+      m_title = title ? title : [NSNull null];
+      m_author = author ? author : [NSNull null];
       self.onVideoLoadStart(@{@"src": @{
                                         @"uri": uri ? uri : [NSNull null],
                                         @"type": type ? type : [NSNull null],
@@ -327,6 +337,8 @@ static NSString *const timedMetadata = @"timedMetadata";
     return [AVPlayerItem playerItemWithAsset:asset];
   }
 
+//  NSDictionary *orderDict=@{@"order": uri};
+//  [[NSNotificationCenter defaultCenter] postNotificationName:AppDidReceiveRemoteControlNotification object:nil userInfo:orderDict];
   return [AVPlayerItem playerItemWithURL:url];
 }
 
@@ -366,6 +378,8 @@ static NSString *const timedMetadata = @"timedMetadata";
       // Handle player item status change.
       if (_playerItem.status == AVPlayerItemStatusReadyToPlay) {
         float duration = CMTimeGetSeconds(_playerItem.asset.duration);
+
+        [self setNowPlayingInfo];
 
         if (isnan(duration)) {
           duration = 0.0;
@@ -462,6 +476,71 @@ static NSString *const timedMetadata = @"timedMetadata";
                                            selector:@selector(playbackStalled:)
                                                name:AVPlayerItemPlaybackStalledNotification
                                              object:nil];
+  [[NSNotificationCenter defaultCenter] addObserver:self
+                                           selector:@selector(handleInterreption:)
+                                               name:AVAudioSessionInterruptionNotification
+                                             object:[AVAudioSession sharedInstance]];
+  [[NSNotificationCenter defaultCenter] addObserver:self
+                                           selector:@selector(listeningRemoteControl:) name:@"kRmoteControl" object:nil];
+
+}
+
+-(void)setNowPlayingInfo{
+    MPMediaItemArtwork *artWork = [[MPMediaItemArtwork alloc] initWithImage:[UIImage imageNamed:@"assets/img/logo120.png"]];
+    CMTime playerDuration = [self playerItemDuration];
+    CMTime currentTime = _player.currentTime;
+    //CMTimeGetSeconds方法将CMTime对象转换成double类型
+    const Float64 duration = CMTimeGetSeconds(playerDuration);
+    const Float64 current = CMTimeGetSeconds(currentTime);
+
+    NSDictionary *dic = @{MPMediaItemPropertyTitle: m_title,
+                          MPMediaItemPropertyArtist: m_author,
+                          MPMediaItemPropertyArtwork:artWork,
+                          MPNowPlayingInfoPropertyPlaybackRate: [NSNumber numberWithFloat:1.0],
+                          MPMediaItemPropertyPlaybackDuration: [NSNumber numberWithDouble:duration],
+                          MPNowPlayingInfoPropertyElapsedPlaybackTime: [NSNumber numberWithDouble:current]
+                          };
+    //设置歌曲图片
+    [[MPNowPlayingInfoCenter defaultCenter] setNowPlayingInfo:dic];
+}
+
+-(void)listeningRemoteControl:(NSNotification *)sender{
+
+    NSDictionary *dict=sender.userInfo;
+    NSInteger order=[[dict objectForKey:@"order"] integerValue];
+    switch (order) {
+
+        case UIEventSubtypeRemoteControlPause:{
+            [_player pause];
+            break;
+        }
+        case UIEventSubtypeRemoteControlPlay:{
+            [_player play];
+            break;
+        }
+        case UIEventSubtypeRemoteControlTogglePlayPause:{
+
+            if(_paused) {
+                [_player play];
+            } else {
+                [_player pause];
+            }
+            break;
+        }
+        default:
+            break;
+    }
+}
+
+- (void)handleInterreption:(NSNotification *)sender {
+
+    if(!_paused){
+        [_player pause];
+        [self setPaused:true];
+    }else{
+        [_player play];
+        [self setPaused:false];
+    }
 }
 
 - (void)playbackStalled:(NSNotification *)notification
@@ -529,6 +608,7 @@ static NSString *const timedMetadata = @"timedMetadata";
     }
     [_player play];
     [_player setRate:_rate];
+    [self setNowPlayingInfo];
   }
 
   _paused = paused;
